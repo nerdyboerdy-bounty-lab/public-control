@@ -1,0 +1,96 @@
+name: boundary-control
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+env:
+  TARGET_REPO: nerdyboerdy-bounty-lab/private-target
+  EXPECTED_CROSS_REPO_MUTATION: denied
+
+jobs:
+  public-control:
+    name: Public control pinned workflow
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prepare evidence directory
+        shell: bash
+        run: mkdir -p boundary-evidence
+
+      - name: Run owned action pinned by commit SHA
+        uses: nerdyboerdy-bounty-lab/owned-action@f4e291dace458f620eee38b738cd42085a0e5385
+        with:
+          lane: public-control-pinned
+
+      - name: Attempt expected-denied private-target mutation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          from pathlib import Path
+
+          content = "public-control token attempted private-target mutation from " + os.environ["GITHUB_REPOSITORY"] + "@" + os.environ["GITHUB_SHA"]
+          body = {
+              "message": "boundary probe: expected denied public-control to private-target mutation",
+              "content": base64.b64encode(content.encode("utf-8")).decode("ascii"),
+          }
+          Path("boundary-evidence/cross-repo-put-body.json").write_text(json.dumps(body, sort_keys=True) + "\n", encoding="utf-8")
+          PY
+
+          status=$(curl -sS \
+            -o boundary-evidence/cross-repo-response.json \
+            -w "%{http_code}" \
+            -X PUT \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${TARGET_REPO}/contents/boundary-denied/public-control-token-attempt.txt" \
+            -d @boundary-evidence/cross-repo-put-body.json)
+
+          verdict="clean-denied"
+          if [[ "$status" =~ ^2 ]]; then
+            verdict="review-unexpected-cross-repo-mutation"
+          fi
+
+          python3 - <<PY
+          import json
+          from pathlib import Path
+
+          observation = {
+              "probe": "github-actions-boundary-01",
+              "lane": "public-control",
+              "sourceRepository": "${GITHUB_REPOSITORY}",
+              "targetRepository": "${TARGET_REPO}",
+              "workflowSha": "${GITHUB_SHA}",
+              "actor": "${GITHUB_ACTOR}",
+              "tokenPermissionModel": "least-privilege contents:read",
+              "attemptedEffect": "cross-repo contents write",
+              "expectedStatus": "403 or 404",
+              "observedHttpStatus": status,
+              "verdict": verdict,
+          }
+          Path("boundary-evidence/control-observation.json").write_text(json.dumps(observation, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          PY
+
+          if [[ "$verdict" != "clean-denied" ]]; then
+            echo "Unexpected cross-repo mutation status: ${status}" >&2
+            exit 1
+          fi
+
+      - name: Upload bounded evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-control-boundary-evidence
+          path: boundary-evidence/
+          if-no-files-found: error
