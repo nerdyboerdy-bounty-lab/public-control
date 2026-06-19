@@ -62,22 +62,23 @@ jobs:
             verdict="review-unexpected-cross-repo-mutation"
           fi
 
-          python3 - <<PY
+          STATUS="$status" VERDICT="$verdict" python3 - <<'PY'
           import json
+          import os
           from pathlib import Path
 
           observation = {
               "probe": "github-actions-boundary-01",
               "lane": "public-control",
-              "sourceRepository": "${GITHUB_REPOSITORY}",
-              "targetRepository": "${TARGET_REPO}",
-              "workflowSha": "${GITHUB_SHA}",
-              "actor": "${GITHUB_ACTOR}",
+              "sourceRepository": os.environ["GITHUB_REPOSITORY"],
+              "targetRepository": os.environ["TARGET_REPO"],
+              "workflowSha": os.environ["GITHUB_SHA"],
+              "actor": os.environ["GITHUB_ACTOR"],
               "tokenPermissionModel": "least-privilege contents:read",
               "attemptedEffect": "cross-repo contents write",
               "expectedStatus": "403 or 404",
-              "observedHttpStatus": status,
-              "verdict": verdict,
+              "observedHttpStatus": os.environ["STATUS"],
+              "verdict": os.environ["VERDICT"],
           }
           Path("boundary-evidence/control-observation.json").write_text(json.dumps(observation, indent=2, sort_keys=True) + "\n", encoding="utf-8")
           PY
